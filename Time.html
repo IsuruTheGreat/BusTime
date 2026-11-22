@@ -28,38 +28,52 @@
   .bus { font-weight:700; }
   .sub { color:var(--muted); font-size:.88rem; }
   .overflow { overflow-x:auto; }
+  .tabs { display:flex; gap:8px; margin-bottom:16px; }
+  .tab { flex:1; background:var(--card); color:var(--text); border:1px solid var(--line); }
+  .tab.active { background:var(--accent); color:#fff; border-color:var(--accent); }
+  .page { display:none; }
+  .page.active { display:block; }
 </style>
 </head>
 <body>
 <main>
   <h1>🚌 Bus Tracker</h1>
+  <div class="tabs">
+    <button class="tab active" id="tabSearch" type="button">🔍 Search buses</button>
+    <button class="tab" id="tabAdd" type="button">➕ Add new data</button>
+  </div>
 
-  <section class="card">
-    <h2>Add a sighting</h2>
-    <div class="grid">
-      <div><label>Bus number</label><input id="bus" placeholder="69" inputmode="text"></div>
-      <div><label>Route name (optional)</label><input id="route" placeholder="Maharagama – Kandy"></div>
-      <div><label>Place seen</label><input id="place" placeholder="Peradeniya Junction"></div>
-      <div><label>Time seen</label><input id="time" type="time"></div>
-      <div class="full"><label>Direction (going to)</label><input id="direction" placeholder="Kandy"></div>
-      <div class="full"><label>Notes (optional)</label><input id="notes" placeholder="e.g. reaches Yakkala about 10 PM"></div>
-    </div>
-    <p><button id="save">Save sighting</button></p>
-    <div class="msg" id="saveMsg"></div>
-  </section>
 
+  <div class="page active" id="pageSearch">
   <section class="card">
     <h2>Search buses</h2>
     <div class="grid">
-      <div><label>My location (place)</label><input id="qPlace" placeholder="Kandy"></div>
-      <div><label>Bus number</label><input id="qBus" placeholder="69"></div>
-      <div><label>Going to</label><input id="qDir" placeholder="Maharagama"></div>
+      <div><label>My location (place)</label><input id="qPlace" list="dl-place" autocomplete="off" placeholder="Kandy"></div>
+      <div><label>Bus number</label><input id="qBus" list="dl-bus" autocomplete="off" placeholder="69"></div>
+      <div><label>Going to</label><input id="qDir" list="dl-dir" autocomplete="off" placeholder="Maharagama"></div>
       <div><label>Show buses after</label><input id="qAfter" type="time"></div>
     </div>
     <p class="sub"><button id="now" type="button" style="background:transparent;color:var(--accent);padding:0;font-size:.9rem">Use current time</button></p>
     <div id="results" class="overflow"></div>
   </section>
+  </div>
+  <div class="page" id="pageAdd">
+  <section class="card">
+    <h2>Add a sighting</h2>
+    <div class="grid">
+      <div><label>Bus number</label><input id="bus" list="dl-bus" autocomplete="off" placeholder="69"></div>
+      <div><label>Route name (optional)</label><input id="route" list="dl-route" autocomplete="off" placeholder="Maharagama – Kandy"></div>
+      <div><label>Place seen</label><input id="place" list="dl-place" autocomplete="off" placeholder="Tap to pick or type a new place"></div>
+      <div><label>Time seen</label><input id="time" type="time"></div>
+      <div class="full"><label>Direction (going to)</label><input id="direction" list="dl-dir" autocomplete="off" placeholder="Kandy"></div>
+      <div class="full"><label>Notes (optional)</label><input id="notes" placeholder="e.g. reaches Yakkala about 10 PM"></div>
+    </div>
+    <p><button id="save">Save sighting</button></p>
+    <div class="msg" id="saveMsg"></div>
+  </section>
+  </div>
 </main>
+<datalist id="dl-bus"></datalist><datalist id="dl-route"></datalist><datalist id="dl-place"></datalist><datalist id="dl-dir"></datalist>
 
 <script>
 // 1) Paste your Apps Script Web App URL here (see README.md)
@@ -97,10 +111,23 @@ function render() {
     : '<p class="sub">No matching buses yet.</p>';
 }
 
+// Fill dropdown suggestions from saved data, most-used first
+function fillLists() {
+  const fields = { 'dl-bus': 'bus', 'dl-route': 'route', 'dl-place': 'place', 'dl-dir': 'direction' };
+  for (const [id, key] of Object.entries(fields)) {
+    const count = {};
+    data.forEach(r => { const v = (r[key] || '').trim(); if (v) count[v] = (count[v] || 0) + 1; });
+    $(id).innerHTML = Object.keys(count)
+      .sort((a, b) => count[b] - count[a] || a.localeCompare(b))
+      .map(v => `<option value="${esc(v)}"></option>`).join('');
+  }
+}
+
 async function load() {
   try {
     const res = await fetch(API_URL);
     data = await res.json();
+    fillLists();
     render();
   } catch (e) {
     $('results').innerHTML = '<p class="sub">Could not load data. Check API_URL in index.html.</p>';
@@ -138,6 +165,17 @@ $('now').onclick = () => {
   $('qAfter').value = String(n.getHours()).padStart(2, '0') + ':' + String(n.getMinutes()).padStart(2, '0');
   render();
 };
+function show(page) {
+  const add = page === 'add';
+  $('pageAdd').classList.toggle('active', add);
+  $('pageSearch').classList.toggle('active', !add);
+  $('tabAdd').classList.toggle('active', add);
+  $('tabSearch').classList.toggle('active', !add);
+  window.scrollTo(0, 0);
+}
+$('tabSearch').onclick = () => show('search');
+$('tabAdd').onclick = () => show('add');
+
 ['qPlace','qBus','qDir','qAfter'].forEach(id => $(id).addEventListener('input', render));
 load();
 </script>
