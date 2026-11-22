@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bus Tracker</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --text:#1c1f24; --muted:#667085; --line:#e4e7ec; --accent:#0b6e4f; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14171a; --card:#1d2125; --text:#eceff3; --muted:#9aa4b2; --line:#2b3138; --accent:#3ecf9b; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, sans-serif; background:var(--bg); color:var(--text); }
+  main { max-width: 760px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 1.3rem; margin: 8px 0 16px; }
+  h2 { font-size: 1rem; margin: 0 0 12px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:16px; }
+  .grid { display:grid; grid-template-columns: 1fr 1fr; gap:10px; }
+  .full { grid-column: 1 / -1; }
+  label { display:block; font-size:.8rem; color:var(--muted); margin-bottom:4px; }
+  input { width:100%; padding:10px; font-size:1rem; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--text); }
+  button { padding:11px 16px; font-size:1rem; border:0; border-radius:8px; background:var(--accent); color:#fff; font-weight:600; cursor:pointer; }
+  button:disabled { opacity:.6; }
+  .msg { font-size:.9rem; margin-top:8px; min-height:1.2em; }
+  .row { border-top:1px solid var(--line); padding:10px 0; display:flex; gap:12px; align-items:baseline; }
+  .row:first-child { border-top:0; }
+  .time { font-weight:700; min-width:76px; color:var(--accent); }
+  .bus { font-weight:700; }
+  .sub { color:var(--muted); font-size:.88rem; }
+  .overflow { overflow-x:auto; }
+</style>
+</head>
+<body>
+<main>
+  <h1>🚌 Bus Tracker</h1>
+
+  <section class="card">
+    <h2>Add a sighting</h2>
+    <div class="grid">
+      <div><label>Bus number</label><input id="bus" placeholder="69" inputmode="text"></div>
+      <div><label>Route name (optional)</label><input id="route" placeholder="Maharagama – Kandy"></div>
+      <div><label>Place seen</label><input id="place" placeholder="Peradeniya Junction"></div>
+      <div><label>Time seen</label><input id="time" type="time"></div>
+      <div class="full"><label>Direction (going to)</label><input id="direction" placeholder="Kandy"></div>
+      <div class="full"><label>Notes (optional)</label><input id="notes" placeholder="e.g. reaches Yakkala about 10 PM"></div>
+    </div>
+    <p><button id="save">Save sighting</button></p>
+    <div class="msg" id="saveMsg"></div>
+  </section>
+
+  <section class="card">
+    <h2>Search buses</h2>
+    <div class="grid">
+      <div><label>My location (place)</label><input id="qPlace" placeholder="Kandy"></div>
+      <div><label>Bus number</label><input id="qBus" placeholder="69"></div>
+      <div><label>Going to</label><input id="qDir" placeholder="Maharagama"></div>
+      <div><label>Show buses after</label><input id="qAfter" type="time"></div>
+    </div>
+    <p class="sub"><button id="now" type="button" style="background:transparent;color:var(--accent);padding:0;font-size:.9rem">Use current time</button></p>
+    <div id="results" class="overflow"></div>
+  </section>
+</main>
+
+<script>
+// 1) Paste your Apps Script Web App URL here (see README.md)
+const API_URL = 'PASTE_YOUR_WEB_APP_URL_HERE';
+
+const $ = id => document.getElementById(id);
+let data = [];
+
+function fmt(t) {
+  const m = /^(\d{1,2}):(\d{2})/.exec(t || '');
+  if (!m) return t || '';
+  let h = +m[1];
+  const ap = h >= 12 ? 'PM' : 'AM';
+  h = h % 12 || 12;
+  return h + ':' + m[2] + ' ' + ap;
+}
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+function render() {
+  const p = $('qPlace').value.trim().toLowerCase();
+  const b = $('qBus').value.trim().toLowerCase();
+  const d = $('qDir').value.trim().toLowerCase();
+  const after = $('qAfter').value;
+  const list = data
+    .filter(r => (!p || r.place.toLowerCase().includes(p))
+      && (!b || r.bus.toLowerCase() === b)
+      && (!d || r.direction.toLowerCase().includes(d))
+      && (!after || r.time >= after))
+    .sort((x, y) => x.time.localeCompare(y.time));
+  $('results').innerHTML = list.length
+    ? list.map(r => `<div class="row"><div class="time">${fmt(r.time)}</div><div>
+        <div><span class="bus">Bus ${esc(r.bus)}</span> → ${esc(r.direction)}</div>
+        <div class="sub">${esc(r.place)}${r.route ? ' · ' + esc(r.route) : ''}${r.notes ? ' · ' + esc(r.notes) : ''}</div>
+      </div></div>`).join('')
+    : '<p class="sub">No matching buses yet.</p>';
+}
+
+async function load() {
+  try {
+    const res = await fetch(API_URL);
+    data = await res.json();
+    render();
+  } catch (e) {
+    $('results').innerHTML = '<p class="sub">Could not load data. Check API_URL in index.html.</p>';
+  }
+}
+
+$('save').onclick = async () => {
+  const rec = {
+    bus: $('bus').value.trim(), route: $('route').value.trim(),
+    place: $('place').value.trim(), time: $('time').value,
+    direction: $('direction').value.trim(), notes: $('notes').value.trim()
+  };
+  const msg = $('saveMsg');
+  if (!rec.bus || !rec.place || !rec.time || !rec.direction) {
+    msg.textContent = 'Please fill bus number, place, time and direction.';
+    return;
+  }
+  $('save').disabled = true; msg.textContent = 'Saving...';
+  try {
+    // text/plain avoids a CORS preflight, which Apps Script does not support
+    const res = await fetch(API_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(rec) });
+    const out = await res.json();
+    if (!out.ok) throw new Error(out.error);
+    msg.textContent = 'Saved ✔';
+    ['bus','route','place','time','direction','notes'].forEach(k => $(k).value = '');
+    await load();
+  } catch (e) {
+    msg.textContent = 'Save failed: ' + e.message;
+  }
+  $('save').disabled = false;
+};
+
+$('now').onclick = () => {
+  const n = new Date();
+  $('qAfter').value = String(n.getHours()).padStart(2, '0') + ':' + String(n.getMinutes()).padStart(2, '0');
+  render();
+};
+['qPlace','qBus','qDir','qAfter'].forEach(id => $(id).addEventListener('input', render));
+load();
+</script>
+</body>
+</html>
