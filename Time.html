@@ -31,6 +31,12 @@
   .tabs { display:flex; gap:8px; margin-bottom:16px; }
   .tab { flex:1; background:var(--card); color:var(--text); border:1px solid var(--line); }
   .tab.active { background:var(--accent); color:#fff; border-color:var(--accent); }
+  input.dd { padding-right:30px; background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8'%3E%3Cpath d='M1 1l5 5 5-5' fill='none' stroke='%23888' stroke-width='2'/%3E%3C/svg%3E"); background-repeat:no-repeat; background-position:right 10px center; }
+  #sugg { position:absolute; z-index:50; display:none; max-height:240px; overflow-y:auto; background:var(--card); border:1px solid var(--line); border-radius:8px; box-shadow:0 6px 20px rgba(0,0,0,.18); }
+  #sugg div { padding:11px 12px; border-top:1px solid var(--line); cursor:pointer; }
+  #sugg div:first-child { border-top:0; }
+  #sugg div.none { color:var(--muted); cursor:default; }
+  #sugg small { color:var(--muted); float:right; margin-left:10px; }
   .page { display:none; }
   .page.active { display:block; }
 </style>
@@ -38,6 +44,7 @@
 <body>
 <main>
   <h1>🚌 Bus Tracker</h1>
+  <div class="sub" id="status" style="margin:-8px 0 12px">Loading...</div>
   <div class="tabs">
     <button class="tab active" id="tabSearch" type="button">🔍 Search buses</button>
     <button class="tab" id="tabAdd" type="button">➕ Add new data</button>
@@ -46,11 +53,14 @@
 
   <div class="page active" id="pageSearch">
   <section class="card">
-    <h2>Search buses</h2>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <h2 style="margin:0">Search buses</h2>
+      <button id="toggleAll" type="button" title="Show all records" style="background:transparent;color:var(--accent);border:1px solid var(--line);padding:6px 10px;font-size:.9rem">📋 All records</button>
+    </div>
     <div class="grid">
-      <div><label>My location (place)</label><input id="qPlace" list="dl-place" autocomplete="off" placeholder="Kandy"></div>
-      <div><label>Bus number</label><input id="qBus" list="dl-bus" autocomplete="off" placeholder="69"></div>
-      <div><label>Going to</label><input id="qDir" list="dl-dir" autocomplete="off" placeholder="Maharagama"></div>
+      <div><label>My location (place)</label><input id="qPlace" autocomplete="off" placeholder="Kandy"></div>
+      <div><label>Bus number</label><input id="qBus" autocomplete="off" placeholder="69"></div>
+      <div><label>Going to</label><input id="qDir" autocomplete="off" placeholder="Maharagama"></div>
       <div><label>Show buses after</label><input id="qAfter" type="time"></div>
     </div>
     <p class="sub"><button id="now" type="button" style="background:transparent;color:var(--accent);padding:0;font-size:.9rem">Use current time</button></p>
@@ -61,11 +71,11 @@
   <section class="card">
     <h2>Add a sighting</h2>
     <div class="grid">
-      <div><label>Bus number</label><input id="bus" list="dl-bus" autocomplete="off" placeholder="69"></div>
-      <div><label>Route name (optional)</label><input id="route" list="dl-route" autocomplete="off" placeholder="Maharagama – Kandy"></div>
-      <div><label>Place seen</label><input id="place" list="dl-place" autocomplete="off" placeholder="Tap to pick or type a new place"></div>
+      <div><label>Bus number</label><input id="bus" autocomplete="off" placeholder="69"></div>
+      <div><label>Route name (optional)</label><input id="route" autocomplete="off" placeholder="Maharagama – Kandy"></div>
+      <div><label>Place seen</label><input id="place" autocomplete="off" placeholder="Tap to pick or type a new place"></div>
       <div><label>Time seen</label><input id="time" type="time"></div>
-      <div class="full"><label>Direction (going to)</label><input id="direction" list="dl-dir" autocomplete="off" placeholder="Kandy"></div>
+      <div class="full"><label>Direction (going to)</label><input id="direction" autocomplete="off" placeholder="Kandy"></div>
       <div class="full"><label>Notes (optional)</label><input id="notes" placeholder="e.g. reaches Yakkala about 10 PM"></div>
     </div>
     <p><button id="save">Save sighting</button></p>
@@ -73,8 +83,8 @@
   </section>
   </div>
 </main>
-<datalist id="dl-bus"></datalist><datalist id="dl-route"></datalist><datalist id="dl-place"></datalist><datalist id="dl-dir"></datalist>
 
+<div id="sugg"></div>
 <script>
 // 1) Paste your Apps Script Web App URL here (see README.md)
 const API_URL = 'https://script.google.com/macros/s/AKfycbxpD9somCdPgaijHGqN3EB7Koo-vxmHd7Hk8r4bFahzU9yT01BAFrEbiPM6vfyzg40/exec';
@@ -92,11 +102,18 @@ function fmt(t) {
 }
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
+let showAll = false;
 function render() {
   const p = $('qPlace').value.trim().toLowerCase();
   const b = $('qBus').value.trim().toLowerCase();
   const d = $('qDir').value.trim().toLowerCase();
   const after = $('qAfter').value;
+  const hasFilter = p || b || d || after;
+  $('toggleAll').textContent = showAll ? '🙈 Hide records' : '📋 All records';
+  if (!hasFilter && !showAll) {
+    $('results').innerHTML = '<p class="sub">Pick a place, bus number, direction or time above to see buses. Tap 📋 to view all saved records.</p>';
+    return;
+  }
   const list = data
     .filter(r => (!p || r.place.toLowerCase().includes(p))
       && (!b || r.bus.toLowerCase() === b)
@@ -111,26 +128,68 @@ function render() {
     : '<p class="sub">No matching buses yet.</p>';
 }
 
-// Fill dropdown suggestions from saved data, most-used first
+// ---- Dropdown suggestions (most-used first), cached so they survive reloads ----
+let counts = { bus: {}, route: {}, place: {}, direction: {} };
+try {
+  const c = JSON.parse(localStorage.getItem('busSugg') || 'null');
+  if (c) counts = Object.assign(counts, c);
+} catch (e) {}
+function saveCounts() { try { localStorage.setItem('busSugg', JSON.stringify(counts)); } catch (e) {} }
 function fillLists() {
-  const fields = { 'dl-bus': 'bus', 'dl-route': 'route', 'dl-place': 'place', 'dl-dir': 'direction' };
-  for (const [id, key] of Object.entries(fields)) {
-    const count = {};
-    data.forEach(r => { const v = (r[key] || '').trim(); if (v) count[v] = (count[v] || 0) + 1; });
-    $(id).innerHTML = Object.keys(count)
-      .sort((a, b) => count[b] - count[a] || a.localeCompare(b))
-      .map(v => `<option value="${esc(v)}"></option>`).join('');
-  }
+  const c = { bus: {}, route: {}, place: {}, direction: {} };
+  data.forEach(r => { for (const k in c) { const v = String(r[k] || '').trim(); if (v) c[k][v] = (c[k][v] || 0) + 1; } });
+  counts = c; saveCounts();
 }
+function addLocal(rec) {
+  for (const k in counts) { const v = String(rec[k] || '').trim(); if (v) counts[k][v] = (counts[k][v] || 0) + 1; }
+  saveCounts();
+}
+const FIELD_KEY = { bus:'bus', route:'route', place:'place', direction:'direction', qPlace:'place', qBus:'bus', qDir:'direction' };
+const sugg = $('sugg');
+function showSugg(input) {
+  const key = FIELD_KEY[input.id];
+  const q = input.value.trim().toLowerCase();
+  const opts = Object.keys(counts[key]).filter(v => !q || v.toLowerCase().includes(q))
+    .sort((a, b) => counts[key][b] - counts[key][a] || a.localeCompare(b));
+  sugg.innerHTML = opts.length
+    ? opts.map(v => `<div data-v="${esc(v)}">${esc(v)}<small>${counts[key][v]}x</small></div>`).join('')
+    : '<div class="none">No saved values yet</div>';
+  const r = input.getBoundingClientRect();
+  sugg.style.left = (r.left + window.scrollX) + 'px';
+  sugg.style.top = (r.bottom + window.scrollY + 2) + 'px';
+  sugg.style.width = r.width + 'px';
+  sugg.style.display = 'block';
+  sugg.dataset.target = input.id;
+}
+function hideSugg() { sugg.style.display = 'none'; }
+sugg.addEventListener('pointerdown', e => {
+  e.preventDefault();
+  const item = e.target.closest('div[data-v]');
+  if (!item) return;
+  const input = $(sugg.dataset.target);
+  input.value = item.dataset.v;
+  hideSugg();
+  render();
+});
+Object.keys(FIELD_KEY).forEach(id => {
+  const el = $(id);
+  el.classList.add('dd');
+  el.autocomplete = 'off';
+  ['focus', 'click', 'input'].forEach(ev => el.addEventListener(ev, () => showSugg(el)));
+  el.addEventListener('blur', () => setTimeout(hideSugg, 150));
+});
 
 async function load() {
   try {
     const res = await fetch(API_URL);
     data = await res.json();
+    if (!Array.isArray(data)) throw new Error(data && data.error ? data.error : 'Unexpected response');
     fillLists();
     render();
+    $('status').textContent = 'Loaded ' + data.length + ' saved sightings';
   } catch (e) {
-    $('results').innerHTML = '<p class="sub">Could not load data. Check API_URL in index.html.</p>';
+    $('status').textContent = 'Could not load saved data (' + e.message + '). Check API_URL and redeploy Apps Script as "Anyone".';
+    $('results').innerHTML = '<p class="sub">No data loaded.</p>';
   }
 }
 
@@ -151,6 +210,7 @@ $('save').onclick = async () => {
     const res = await fetch(API_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(rec) });
     const out = await res.json();
     if (!out.ok) throw new Error(out.error);
+    addLocal(rec);
     msg.textContent = 'Saved ✔';
     ['bus','route','place','time','direction','notes'].forEach(k => $(k).value = '');
     await load();
@@ -165,6 +225,8 @@ $('now').onclick = () => {
   $('qAfter').value = String(n.getHours()).padStart(2, '0') + ':' + String(n.getMinutes()).padStart(2, '0');
   render();
 };
+$('toggleAll').onclick = () => { showAll = !showAll; render(); };
+
 function show(page) {
   const add = page === 'add';
   $('pageAdd').classList.toggle('active', add);
@@ -173,7 +235,8 @@ function show(page) {
   $('tabSearch').classList.toggle('active', !add);
   window.scrollTo(0, 0);
 }
-$('tabSearch').onclick = () => show('search');
+$('tabSearch').onclick = () => { show('search'); load(); };
+setInterval(() => { if (document.visibilityState === 'visible') load(); }, 60000); // pick up other people's new entries
 $('tabAdd').onclick = () => show('add');
 
 ['qPlace','qBus','qDir','qAfter'].forEach(id => $(id).addEventListener('input', render));
