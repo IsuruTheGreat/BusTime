@@ -22,7 +22,7 @@
   button { padding:11px 16px; font-size:1rem; border:0; border-radius:8px; background:var(--accent); color:#fff; font-weight:600; cursor:pointer; }
   button:disabled { opacity:.6; }
   .msg { font-size:.9rem; margin-top:8px; min-height:1.2em; }
-  .row { border-top:1px solid var(--line); padding:10px 0; display:flex; gap:12px; align-items:baseline; }
+  .row { border-top:1px solid var(--line); padding:10px 0; display:flex; flex-wrap:wrap; gap:12px; align-items:baseline; cursor:pointer; }
   .row:first-child { border-top:0; }
   .time { font-weight:700; min-width:76px; color:var(--accent); }
   .bus { font-weight:700; }
@@ -39,6 +39,12 @@
   #sugg small { color:var(--muted); float:right; margin-left:10px; }
   .page { display:none; }
   .page.active { display:block; }
+  .act { display:none; width:100%; gap:6px; flex-wrap:wrap; cursor:default; }
+  .row.open .act { display:flex; }
+  .stops { width:100%; margin-top:6px; }
+  .stoprow { display:grid; grid-template-columns:1fr 130px; gap:8px; margin-bottom:8px; }
+  .act button { padding:5px 9px; font-size:.8rem; background:transparent; color:var(--accent); border:1px solid var(--line); }
+  .act button[data-act="del"] { color:#d92d20; }
 </style>
 </head>
 <body>
@@ -49,7 +55,6 @@
     <button class="tab active" id="tabSearch" type="button">🔍 Search buses</button>
     <button class="tab" id="tabAdd" type="button">➕ Add new data</button>
   </div>
-
 
   <div class="page active" id="pageSearch">
   <section class="card">
@@ -67,9 +72,10 @@
     <div id="results" class="overflow"></div>
   </section>
   </div>
+
   <div class="page" id="pageAdd">
   <section class="card">
-    <h2>Add a sighting</h2>
+    <h2 id="formTitle">Add a sighting</h2>
     <div class="grid">
       <div><label>Bus number</label><input id="bus" autocomplete="off" placeholder="69"></div>
       <div><label>Route name (optional)</label><input id="route" autocomplete="off" placeholder="Maharagama – Kandy"></div>
@@ -78,7 +84,10 @@
       <div class="full"><label>Direction (going to)</label><input id="direction" autocomplete="off" placeholder="Kandy"></div>
       <div class="full"><label>Notes (optional)</label><input id="notes" placeholder="e.g. reaches Yakkala about 10 PM"></div>
     </div>
-    <p><button id="save">Save sighting</button></p>
+    <p>
+      <button id="save">Save sighting</button>
+      <button id="cancelEdit" type="button" style="display:none;background:transparent;color:var(--muted);border:1px solid var(--line)">Cancel</button>
+    </p>
     <div class="msg" id="saveMsg"></div>
   </section>
   </div>
@@ -86,7 +95,7 @@
 
 <div id="sugg"></div>
 <script>
-// 1) Paste your Apps Script Web App URL here (see README.md)
+// Apps Script Web App URL
 const API_URL = 'https://script.google.com/macros/s/AKfycbxpD9somCdPgaijHGqN3EB7Koo-vxmHd7Hk8r4bFahzU9yT01BAFrEbiPM6vfyzg40/exec';
 
 const $ = id => document.getElementById(id);
@@ -103,6 +112,8 @@ function fmt(t) {
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
 let showAll = false;
+let openId = null;   // record whose actions are expanded
+let stopsId = null;  // record whose 'add times' panel is open
 function render() {
   const p = $('qPlace').value.trim().toLowerCase();
   const b = $('qBus').value.trim().toLowerCase();
@@ -121,11 +132,22 @@ function render() {
       && (!after || r.time >= after))
     .sort((x, y) => x.time.localeCompare(y.time));
   $('results').innerHTML = list.length
-    ? list.map(r => `<div class="row"><div class="time">${fmt(r.time)}</div><div>
+    ? list.map(r => `<div class="row${r.id === openId ? ' open' : ''}" data-id="${r.id}"><div class="time">${fmt(r.time)}</div><div>
         <div><span class="bus">Bus ${esc(r.bus)}</span> → ${esc(r.direction)}</div>
         <div class="sub">${esc(r.place)}${r.route ? ' · ' + esc(r.route) : ''}${r.notes ? ' · ' + esc(r.notes) : ''}</div>
+      </div><div class="act">
+        <button data-act="edit">Edit</button>
+        <button data-act="del">Delete</button>
+        <button data-act="times">＋ Add times at other stops</button>
+        ${r.id === stopsId ? `<div class="stops"><div class="stoplist"></div>
+          <button data-act="addrow" type="button">＋ Stop</button>
+          <button data-act="savestops" type="button">Save times</button>
+          <button data-act="cancelstops" type="button" style="background:transparent;color:var(--muted);border:1px solid var(--line)">Cancel</button>
+          <div class="sub" id="stopMsg"></div></div>` : ''}
       </div></div>`).join('')
     : '<p class="sub">No matching buses yet.</p>';
+  const sl = document.querySelector('.stoplist');
+  if (sl && !sl.children.length) addStopRow(sl);
 }
 
 // ---- Dropdown suggestions (most-used first), cached so they survive reloads ----
@@ -169,15 +191,26 @@ sugg.addEventListener('pointerdown', e => {
   const input = $(sugg.dataset.target);
   input.value = item.dataset.v;
   hideSugg();
-  render();
+  if (input.id[0] === 'q') render();
 });
-Object.keys(FIELD_KEY).forEach(id => {
-  const el = $(id);
+function attachDD(el) {
   el.classList.add('dd');
   el.autocomplete = 'off';
   ['focus', 'click', 'input'].forEach(ev => el.addEventListener(ev, () => showSugg(el)));
   el.addEventListener('blur', () => setTimeout(hideSugg, 150));
-});
+}
+Object.keys(FIELD_KEY).forEach(id => attachDD($(id)));
+
+let spN = 0;
+function addStopRow(box) {
+  const id = 'sp' + (++spN);
+  FIELD_KEY[id] = 'place';
+  const d = document.createElement('div');
+  d.className = 'stoprow';
+  d.innerHTML = `<input id="${id}" placeholder="Stop (pick or type)"><input type="time">`;
+  box.appendChild(d);
+  attachDD($(id));
+}
 
 async function load() {
   try {
@@ -193,6 +226,42 @@ async function load() {
   }
 }
 
+// ---- Add / edit form ----
+let editing = null;
+const FIELDS = ['bus', 'route', 'place', 'time', 'direction', 'notes'];
+
+function clearForm() {
+  FIELDS.forEach(k => $(k).value = '');
+}
+function startEdit(r) {
+  editing = r;
+  FIELDS.forEach(k => $(k).value = r[k] || '');
+  $('formTitle').textContent = 'Edit sighting';
+  $('save').textContent = 'Update sighting';
+  $('cancelEdit').style.display = '';
+  $('saveMsg').textContent = '';
+  show('add');
+}
+function endEdit() {
+  editing = null;
+  clearForm();
+  $('formTitle').textContent = 'Add a sighting';
+  $('save').textContent = 'Save sighting';
+  $('cancelEdit').style.display = 'none';
+}
+$('cancelEdit').onclick = () => { endEdit(); show('search'); };
+
+async function post(body) {
+  // text/plain avoids a CORS preflight, which Apps Script does not support
+  const res = await fetch(API_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify(body)
+  });
+  const out = await res.json();
+  if (!out.ok) throw new Error(out.error);
+}
+
 $('save').onclick = async () => {
   const rec = {
     bus: $('bus').value.trim(), route: $('route').value.trim(),
@@ -206,19 +275,70 @@ $('save').onclick = async () => {
   }
   $('save').disabled = true; msg.textContent = 'Saving...';
   try {
-    // text/plain avoids a CORS preflight, which Apps Script does not support
-    const res = await fetch(API_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(rec) });
-    const out = await res.json();
-    if (!out.ok) throw new Error(out.error);
-    addLocal(rec);
-    msg.textContent = 'Saved ✔';
-    ['bus','route','place','time','direction','notes'].forEach(k => $(k).value = '');
+    if (editing) {
+      await post({ action: 'update', id: editing.id, added: editing.added, rec });
+      endEdit();
+      msg.textContent = 'Updated ✔';
+      show('search');
+    } else {
+      await post({ action: 'add', records: [rec] });
+      addLocal(rec);
+      clearForm();
+      msg.textContent = 'Saved ✔';
+    }
     await load();
   } catch (e) {
     msg.textContent = 'Save failed: ' + e.message;
   }
   $('save').disabled = false;
 };
+
+// ---- Tap a record to open Edit / Delete / Add times ----
+$('results').addEventListener('click', async e => {
+  const rowEl = e.target.closest('.row');
+  if (!rowEl) return;
+  const r = data.find(x => String(x.id) === rowEl.dataset.id);
+  if (!r) return;
+  const btn = e.target.closest('button[data-act]');
+  if (!btn) {
+    if (e.target.closest('.act')) return; // taps inside the panel
+    openId = openId === r.id ? null : r.id;
+    stopsId = null;
+    render();
+    return;
+  }
+  const act = btn.dataset.act;
+  if (act === 'edit') return startEdit(r);
+  if (act === 'times') { stopsId = r.id; render(); return; }
+  if (act === 'cancelstops') { stopsId = null; render(); return; }
+  if (act === 'addrow') { addStopRow(rowEl.querySelector('.stoplist')); return; }
+  if (act === 'savestops') {
+    const recs = [];
+    rowEl.querySelectorAll('.stoprow').forEach(sr => {
+      const place = sr.children[0].value.trim(), time = sr.children[1].value;
+      if (place && time && place.toLowerCase() !== r.place.toLowerCase()) {
+        recs.push({ bus: r.bus, route: r.route, place, time, direction: r.direction,
+          notes: 'From ' + r.place + ' ' + fmt(r.time) });
+      }
+    });
+    const m = rowEl.querySelector('#stopMsg');
+    if (!recs.length) { m.textContent = 'Add at least one stop and time.'; return; }
+    btn.disabled = true; m.textContent = 'Saving...';
+    try {
+      await post({ action: 'add', records: recs });
+      recs.forEach(addLocal);
+      openId = null; stopsId = null;
+      await load();
+    } catch (err) { m.textContent = 'Failed: ' + err.message; btn.disabled = false; }
+    return;
+  }
+  if (act === 'del') {
+    if (!confirm('Delete Bus ' + r.bus + ' at ' + fmt(r.time) + ' (' + r.place + ')?')) return;
+    $('status').textContent = 'Deleting...';
+    try { await post({ action: 'delete', id: r.id, added: r.added }); openId = null; await load(); }
+    catch (err) { $('status').textContent = 'Delete failed: ' + err.message; }
+  }
+});
 
 $('now').onclick = () => {
   const n = new Date();
@@ -236,10 +356,10 @@ function show(page) {
   window.scrollTo(0, 0);
 }
 $('tabSearch').onclick = () => { show('search'); load(); };
-setInterval(() => { if (document.visibilityState === 'visible') load(); }, 60000); // pick up other people's new entries
 $('tabAdd').onclick = () => show('add');
+setInterval(() => { if (document.visibilityState === 'visible' && stopsId === null) load(); }, 60000); // pick up other people's new entries
 
-['qPlace','qBus','qDir','qAfter'].forEach(id => $(id).addEventListener('input', render));
+['qPlace', 'qBus', 'qDir', 'qAfter'].forEach(id => $(id).addEventListener('input', render));
 load();
 </script>
 </body>
